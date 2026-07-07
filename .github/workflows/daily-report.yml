@@ -1,0 +1,93 @@
+name: Daily Market WeChat Report
+
+on:
+  schedule:
+    # A shares close report: 15:30 Beijing/Taipei time.
+    - cron: "30 7 * * 1-5"
+    # US close report. Two UTC slots cover daylight saving time and standard time.
+    - cron: "30 21 * * 1-5"
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      market:
+        description: "Market to run"
+        required: true
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - a
+          - us
+      push:
+        description: "Send WeChat push"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    env:
+      PUSH_CHANNEL: ${{ secrets.PUSH_CHANNEL }}
+      SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+      PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      DEDUP_STATE_FILE: state/push_log.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare runtime options
+        id: runtime
+        shell: bash
+        run: |
+          echo "cache_date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "market=${{ inputs.market }}" >> "$GITHUB_OUTPUT"
+            echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
+          else
+            hour="$(date -u +%H)"
+            if [ "$hour" = "07" ]; then
+              echo "market=a" >> "$GITHUB_OUTPUT"
+            else
+              echo "market=us" >> "$GITHUB_OUTPUT"
+            fi
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore dedupe state
+        uses: actions/cache@v4
+        with:
+          path: state
+          key: market-daily-state-${{ runner.os }}-${{ steps.runtime.outputs.cache_date }}-${{ github.run_id }}
+          restore-keys: |
+            market-daily-state-${{ runner.os }}-${{ steps.runtime.outputs.cache_date }}-
+
+      - name: Run report
+        shell: bash
+        run: |
+          mkdir -p reports state
+          if [ "${{ steps.runtime.outputs.push }}" = "true" ]; then
+            python -m market_daily_wechat_report.main --market "${{ steps.runtime.outputs.market }}"
+          else
+            python -m market_daily_wechat_report.main --market "${{ steps.runtime.outputs.market }}" --no-push
+          fi
+
+      - name: Upload generated reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: market-reports-${{ github.run_id }}
+          path: reports/*.md
+          if-no-files-found: ignore
