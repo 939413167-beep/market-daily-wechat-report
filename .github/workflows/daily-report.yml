@@ -9,6 +9,14 @@ on:
     - cron: "30 22 * * 1-5"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Run mode"
+        required: true
+        default: "report"
+        type: choice
+        options:
+          - report
+          - test-push
       market:
         description: "Market to run"
         required: true
@@ -54,9 +62,11 @@ jobs:
         run: |
           echo "cache_date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
             echo "market=${{ inputs.market }}" >> "$GITHUB_OUTPUT"
             echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
           else
+            echo "mode=report" >> "$GITHUB_OUTPUT"
             hour="$(date -u +%H)"
             if [ "$hour" = "07" ]; then
               echo "market=a" >> "$GITHUB_OUTPUT"
@@ -78,10 +88,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p reports state
-          if [ "${{ steps.runtime.outputs.push }}" = "true" ]; then
+          if [ "${{ steps.runtime.outputs.mode }}" = "test-push" ]; then
+            python -m market_daily_wechat_report.main --test-push
+          elif [ "${{ steps.runtime.outputs.push }}" = "true" ]; then
             python -m market_daily_wechat_report.main --market "${{ steps.runtime.outputs.market }}"
           else
-            python -m market_daily_wechat_report.main --market "${{ steps.runtime.outputs.market }}" --no-push
+            python -m market_daily_wechat_report.main --market "${{ steps.runtime.outputs.market }}" --dry-run
           fi
 
       - name: Upload generated reports

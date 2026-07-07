@@ -22,6 +22,8 @@ class RunResult:
     report_path: str | None
     data_sources: list[DataSourceStatus]
     snapshot: MarketSnapshot | None = None
+    push_attempted: bool = False
+    push_error: str | None = None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     if len(markets) > 1 and all(not result.success for result in results):
         results.append(_run_combined_degraded_report(results, settings, dry_run=dry_run))
 
+    if any(result.push_attempted and not result.pushed for result in results):
+        return 1
     return 0 if any(result.success or result.pushed or result.report_path for result in results) else 1
 
 
@@ -76,6 +80,7 @@ def _run_market(market: str, settings: Settings, dry_run: bool = False) -> RunRe
         print(f"[report] generated without push: {report_path}")
         return RunResult(snapshot.market, has_data, False, str(report_path), snapshot.data_sources, final_snapshot)
 
+    push_error = None
     try:
         push_markdown(title, markdown_for_push, settings)
         pushed = True
@@ -84,13 +89,23 @@ def _run_market(market: str, settings: Settings, dry_run: bool = False) -> RunRe
             dedupe.mark_sent(snapshot.market, snapshot.session_date)
         print(f"[report] pushed: {snapshot.market} {snapshot.session_date}")
     except Exception as exc:
-        final_snapshot = with_push_status(snapshot, f"微信推送失败: {exc}")
-        print(f"[push] failed for {snapshot.market}: {exc}", file=sys.stderr)
+        push_error = str(exc)
+        final_snapshot = with_push_status(snapshot, f"微信推送失败: {push_error}")
+        print(f"报告生成成功，但微信推送失败: {push_error}", file=sys.stderr)
 
     final_markdown = render_report(final_snapshot)
     report_path = save_report(final_snapshot, final_markdown, settings.reports_dir)
     print(f"[report] saved: {report_path}")
-    return RunResult(snapshot.market, has_data, pushed, str(report_path), snapshot.data_sources, final_snapshot)
+    return RunResult(
+        snapshot.market,
+        has_data,
+        pushed,
+        str(report_path),
+        snapshot.data_sources,
+        final_snapshot,
+        push_attempted=True,
+        push_error=push_error,
+    )
 
 
 def _fetch_snapshot(market: str) -> MarketSnapshot:
@@ -132,6 +147,7 @@ def _run_auto_combined(markets: list[str], settings: Settings, dry_run: bool = F
     markdown_for_push = _render_combined_report(snapshots, "推送中")
     pushed = False
     push_status = "微信推送成功"
+    push_error = None
     try:
         push_markdown(title, markdown_for_push, settings)
         pushed = True
@@ -141,8 +157,9 @@ def _run_auto_combined(markets: list[str], settings: Settings, dry_run: bool = F
                 dedupe.mark_sent(result.snapshot.market, result.snapshot.session_date)
         print(f"[report] pushed: auto combined {date.today().isoformat()}")
     except Exception as exc:
-        push_status = f"微信推送失败: {exc}"
-        print(f"[push] failed for auto combined report: {exc}", file=sys.stderr)
+        push_error = str(exc)
+        push_status = f"微信推送失败: {push_error}"
+        print(f"报告生成成功，但微信推送失败: {push_error}", file=sys.stderr)
 
     path = settings.reports_dir / f"all_{date.today().isoformat()}_report.md"
     settings.reports_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +168,8 @@ def _run_auto_combined(markets: list[str], settings: Settings, dry_run: bool = F
 
     if all(not result.success for result in results):
         _run_combined_degraded_report(results, settings, dry_run=False, skip_push=True, push_status=push_status)
+    if push_error:
+        return 1
     return 0 if pushed or any(result.success for result in results) else 1
 
 
@@ -167,6 +186,7 @@ def _run_combined_degraded_report(
     path = settings.reports_dir / f"all_{date.today().isoformat()}_degraded.md"
     settings.reports_dir.mkdir(parents=True, exist_ok=True)
     pushed = False
+    push_error = None
 
     if dry_run:
         print("dry-run 模式：已跳过微信推送")
@@ -176,13 +196,14 @@ def _run_combined_degraded_report(
             pushed = True
             push_status = "微信推送成功"
         except Exception as exc:
-            push_status = f"微信推送失败: {exc}"
-            print(f"[push] failed for combined degraded report: {exc}", file=sys.stderr)
+            push_error = str(exc)
+            push_status = f"微信推送失败: {push_error}"
+            print(f"报告生成成功，但微信推送失败: {push_error}", file=sys.stderr)
 
     final_markdown = render_degraded_report(date.today(), data_sources, push_status=push_status)
     path.write_text(final_markdown, encoding="utf-8")
     print(f"[report] saved: {path}")
-    return RunResult("all", False, pushed, str(path), data_sources)
+    return RunResult("all", False, pushed, str(path), data_sources, push_attempted=not dry_run and not skip_push, push_error=push_error)
 
 
 def _run_test_push(settings: Settings) -> int:

@@ -1,10 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from market_daily_wechat_report.config import Settings
-from market_daily_wechat_report.push import push_markdown
+from market_daily_wechat_report.push import PushError, push_markdown
 
 
-def test_none_channel_skips_push():
+def test_none_channel_rejects_real_push():
     settings = Settings(
         push_channel="none",
         serverchan_sendkey=None,
@@ -14,4 +16,5 @@ def test_none_channel_skips_push():
         reports_dir=Path("reports"),
     )
 
-    push_markdown("title", "# report", settings)
+    with pytest.raises(PushError):
+        push_markdown("title", "# report", settings)
