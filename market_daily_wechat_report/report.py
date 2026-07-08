@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .formatting import fmt_amount_cny, fmt_number, fmt_pct
-from .models import DataSourceStatus, MarketItem, MarketSnapshot
+from .models import DataSourceStatus, MarketItem, MarketSnapshot, TechObservation, ThemeTracking
 
 
 MARKET_NAMES = {
@@ -30,9 +30,15 @@ def render_report(snapshot: MarketSnapshot) -> str:
         parts.extend(["", _render_items("## 领跌方向", snapshot.laggards)])
     if snapshot.focus_items:
         parts.extend(["", _render_items("## 重点观察", snapshot.focus_items)])
+    if snapshot.theme_tracking:
+        parts.extend(["", _render_theme_tracking(snapshot.theme_tracking)])
+    if snapshot.tech_observation:
+        parts.extend(["", _render_tech_observation(snapshot.tech_observation)])
 
     if snapshot.summary:
         parts.extend(["", "## 简短总结", snapshot.summary])
+    if snapshot.tomorrow_observation:
+        parts.extend(["", "## 明日观察", snapshot.tomorrow_observation])
     if snapshot.notes:
         parts.extend(["", "## 备注"])
         parts.extend(f"- {note}" for note in snapshot.notes)
@@ -113,6 +119,40 @@ def _render_data_sources(statuses: list[DataSourceStatus]) -> str:
         else:
             rows.append(f"- {status.name}: 失败，{status.error or '数据暂不可用'}")
     return "\n".join(rows)
+
+
+def _render_theme_tracking(items: list[ThemeTracking]) -> str:
+    rows = ["## 重点方向跟踪"]
+    for item in items:
+        rows.append(f"### {item.name}")
+        matched = "、".join(board.name for board in item.matched_boards[:5]) or "数据不足"
+        rows.append(f"- 相关板块: {matched}")
+        rows.append(f"- 平均涨跌幅: {fmt_pct(item.average_change_pct)}")
+        rows.append(f"- 最强相关板块: {_theme_board_text(item.strongest)}")
+        rows.append(f"- 最弱相关板块: {_theme_board_text(item.weakest)}")
+        rows.append(f"- 状态判断: {item.status}")
+    return "\n".join(rows)
+
+
+def _render_tech_observation(observation: TechObservation) -> str:
+    return "\n".join(
+        [
+            "## 科技龙头观察",
+            _render_items("### 涨幅前三", observation.top_gainers),
+            "",
+            _render_items("### 跌幅前三", observation.top_losers),
+            "",
+            _render_items("### AI算力相关", observation.ai_compute),
+            "",
+            _render_items("### 大型科技", observation.mega_tech),
+        ]
+    )
+
+
+def _theme_board_text(item: MarketItem | None) -> str:
+    if item is None:
+        return "数据不足"
+    return f"{item.name} {fmt_pct(item.change_pct)}"
 
 
 def _market_status(statuses: list[DataSourceStatus], prefix: str) -> str:

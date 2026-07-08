@@ -1,0 +1,45 @@
+a_share:
+  themes:
+    - name: 半导体
+      keywords:
+        - 半导体
+        - 芯片
+        - 集成电路
+    - name: CPO / 光模块
+      keywords:
+        - CPO
+        - 光模块
+        - 光通信
+    - name: AI算力
+      keywords:
+        - 算力
+        - AI
+        - 服务器
+        - 液冷
+    - name: 机器人
+      keywords:
+        - 机器人
+        - 减速器
+        - 伺服
+    - name: 通信设备
+      keywords:
+        - 通信设备
+        - 5G
+        - 光通信
+    - name: 消费电子
+      keywords:
+        - 消费电子
+        - 苹果产业链
+        - 端侧AI
+us:
+  tickers:
+    - NVDA
+    - AMD
+    - AVGO
+    - TSM
+    - ASML
+    - MSFT
+    - AAPL
+    - GOOGL
+    - META
+    - TSLA

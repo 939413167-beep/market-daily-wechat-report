@@ -65,7 +65,7 @@ def _run_market(market: str, settings: Settings, dry_run: bool = False) -> RunRe
     report_path = None
     pushed = False
 
-    if _is_push_blocked_by_market_timing(snapshot):
+    if not dry_run and _is_push_blocked_by_market_timing(snapshot):
         final_snapshot = with_push_status(snapshot, "美股未收盘，已跳过微信推送")
         report_path = save_report(final_snapshot, render_report(final_snapshot), settings.reports_dir)
         print("美股未收盘，已跳过微信推送")
@@ -146,7 +146,7 @@ def _run_auto_combined(markets: list[str], settings: Settings, dry_run: bool = F
         snapshots.append(final_snapshot)
         results.append(RunResult(snapshot.market, has_data, False, str(path), snapshot.data_sources, final_snapshot))
 
-    if any(_is_push_blocked_by_market_timing(snapshot) for snapshot in snapshots):
+    if not dry_run and any(_is_push_blocked_by_market_timing(snapshot) for snapshot in snapshots):
         print("美股未收盘，综合报告已跳过微信推送")
         path = settings.reports_dir / f"all_{date.today().isoformat()}_report.md"
         settings.reports_dir.mkdir(parents=True, exist_ok=True)
