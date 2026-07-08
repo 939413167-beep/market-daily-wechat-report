@@ -6,7 +6,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from ..models import DataSourceStatus, MarketItem, MarketSnapshot
+from ..models import DataSourceStatus, MarketItem, MarketSnapshot, TechObservation
+from ..watchlist import load_watchlist
 from .utils import YFINANCE_RATE_LIMIT_DELAYS, fetch_with_retry, summarize_error
 
 
@@ -16,20 +17,18 @@ INDEX_SYMBOLS = {
     "标普500": "^GSPC",
 }
 
-TECH_SYMBOLS = {
-    "NVDA": "NVDA",
-    "AAPL": "AAPL",
-    "MSFT": "MSFT",
-    "TSLA": "TSLA",
-}
+AI_COMPUTE_TICKERS = {"NVDA", "AMD", "AVGO", "TSM", "ASML"}
+MEGA_TECH_TICKERS = {"MSFT", "AAPL", "GOOGL", "META", "TSLA"}
 
 
 def fetch_us_market_snapshot() -> MarketSnapshot:
     import yfinance as yf
 
+    watchlist = load_watchlist()
     statuses: list[DataSourceStatus] = []
     indexes = [_fetch_yahoo_item(yf, name, symbol, statuses) for name, symbol in INDEX_SYMBOLS.items()]
-    focus_items = [_fetch_yahoo_item(yf, name, symbol, statuses) for name, symbol in TECH_SYMBOLS.items()]
+    focus_items = [_fetch_yahoo_item(yf, ticker, ticker, statuses) for ticker in watchlist.us_tickers]
+    tech_observation = _build_tech_observation(focus_items)
 
     session_date = _latest_session_date(indexes + focus_items) or date.today()
     close_status = _close_status(session_date)
@@ -51,6 +50,7 @@ def fetch_us_market_snapshot() -> MarketSnapshot:
         },
         summary=summary,
         notes=notes,
+        tech_observation=tech_observation,
         data_sources=statuses,
     )
 
@@ -132,6 +132,22 @@ def _build_summary(
     tech_down = [item.name for item in focus_items if (item.change_pct or 0) < 0]
     tone = "偏强" if len(tech_up) > len(tech_down) else "偏弱" if len(tech_up) < len(tech_down) else "分化"
     return f"{index_text}。重点科技股表现{tone}，上涨包括{_join_or_none(tech_up)}，下跌包括{_join_or_none(tech_down)}。"
+
+
+def _build_tech_observation(items: list[MarketItem]) -> TechObservation:
+    valid = [item for item in items if item.change_pct is not None]
+    top_gainers = sorted(valid, key=lambda item: item.change_pct or 0, reverse=True)[:3]
+    top_losers = sorted(valid, key=lambda item: item.change_pct or 0)[:3]
+    if not top_gainers:
+        top_gainers = [MarketItem(name="数据不足", symbol="-", extra="yfinance 数据暂不可用")]
+    if not top_losers:
+        top_losers = [MarketItem(name="数据不足", symbol="-", extra="yfinance 数据暂不可用")]
+    return TechObservation(
+        top_gainers=top_gainers,
+        top_losers=top_losers,
+        ai_compute=[item for item in items if item.symbol in AI_COMPUTE_TICKERS],
+        mega_tech=[item for item in items if item.symbol in MEGA_TECH_TICKERS],
+    )
 
 
 def _signed(value: float | None) -> str:

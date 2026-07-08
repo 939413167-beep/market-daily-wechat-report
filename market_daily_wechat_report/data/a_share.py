@@ -4,7 +4,8 @@ from datetime import date
 
 import pandas as pd
 
-from ..models import DataSourceStatus, MarketItem, MarketSnapshot
+from ..models import DataSourceStatus, MarketItem, MarketSnapshot, ThemeTracking
+from ..watchlist import WatchTheme, load_watchlist
 from .utils import fetch_with_retry, log_proxy_status, summarize_error
 
 
@@ -24,6 +25,7 @@ def fetch_a_share_snapshot(session_date: date | None = None) -> MarketSnapshot:
     log_proxy_status()
     session_date = session_date or date.today()
     statuses: list[DataSourceStatus] = []
+    watchlist = load_watchlist()
 
     is_trade_day, trade_status = _safe_is_a_share_trade_day(ak, session_date)
     statuses.append(trade_status)
@@ -67,7 +69,14 @@ def fetch_a_share_snapshot(session_date: date | None = None) -> MarketSnapshot:
         lambda: _extract_focus_boards(board_df) if board_df is not None else _missing_focus_items(),
         _missing_focus_items(),
     )
+    theme_tracking = _safe_extract(
+        "A股-重点方向跟踪解析",
+        statuses,
+        lambda: _extract_theme_tracking(board_df, watchlist.a_share_themes) if board_df is not None else _missing_theme_tracking(watchlist.a_share_themes),
+        _missing_theme_tracking(watchlist.a_share_themes),
+    )
     summary = _build_summary(indexes, breadth, leaders, laggards, statuses)
+    tomorrow_observation = _build_tomorrow_observation(indexes, theme_tracking)
 
     return MarketSnapshot(
         market="a",
@@ -78,6 +87,8 @@ def fetch_a_share_snapshot(session_date: date | None = None) -> MarketSnapshot:
         laggards=laggards,
         breadth=breadth,
         summary=summary,
+        theme_tracking=theme_tracking,
+        tomorrow_observation=tomorrow_observation,
         data_sources=statuses,
     )
 
@@ -179,6 +190,88 @@ def _extract_focus_boards(df: pd.DataFrame) -> list[MarketItem]:
     return items
 
 
+def _extract_theme_tracking(df: pd.DataFrame, themes: list[WatchTheme]) -> list[ThemeTracking]:
+    frame = df.copy()
+    name_col = "板块名称" if "板块名称" in frame.columns else "名称"
+    frame["涨跌幅"] = pd.to_numeric(frame.get("涨跌幅"), errors="coerce")
+    tracking: list[ThemeTracking] = []
+
+    for theme in themes:
+        matched = _match_theme_rows(frame, name_col, theme.keywords)
+        if matched.empty:
+            tracking.append(ThemeTracking(name=theme.name, status="数据不足"))
+            continue
+
+        boards = [_board_item(row) for _, row in matched.iterrows()]
+        valid = [item for item in boards if item.change_pct is not None]
+        if not valid:
+            tracking.append(ThemeTracking(name=theme.name, matched_boards=boards, status="数据不足"))
+            continue
+
+        average = sum(item.change_pct or 0 for item in valid) / len(valid)
+        strongest = max(valid, key=lambda item: item.change_pct or 0)
+        weakest = min(valid, key=lambda item: item.change_pct or 0)
+        tracking.append(
+            ThemeTracking(
+                name=theme.name,
+                matched_boards=boards,
+                average_change_pct=average,
+                strongest=strongest,
+                weakest=weakest,
+                status=_theme_status(valid, average),
+            )
+        )
+    return tracking
+
+
+def _match_theme_rows(frame: pd.DataFrame, name_col: str, keywords: list[str]) -> pd.DataFrame:
+    if not keywords or name_col not in frame.columns:
+        return frame.iloc[0:0]
+    mask = pd.Series(False, index=frame.index)
+    for keyword in keywords:
+        mask = mask | frame[name_col].astype(str).str.contains(keyword, case=False, na=False)
+    return frame[mask].drop_duplicates(subset=[name_col]).sort_values("涨跌幅", ascending=False)
+
+
+def _theme_status(items: list[MarketItem], average: float | None) -> str:
+    if average is None or not items:
+        return "数据不足"
+    changes = [item.change_pct for item in items if item.change_pct is not None]
+    if not changes:
+        return "数据不足"
+    if max(changes) >= 1 and min(changes) <= -1:
+        return "分歧"
+    if average >= 1:
+        return "偏强"
+    if average <= -1:
+        return "偏弱"
+    return "分歧"
+
+
+def _build_tomorrow_observation(indexes: list[MarketItem], tracking: list[ThemeTracking]) -> str:
+    if not tracking or any(item.status == "数据不足" for item in tracking):
+        return "部分数据源不可用，明日观察模块仅供参考。"
+
+    status_by_name = {item.name: item.status for item in tracking}
+    core_statuses = [
+        status_by_name.get("半导体"),
+        status_by_name.get("CPO / 光模块"),
+        status_by_name.get("AI算力"),
+    ]
+    if all(status == "偏强" for status in core_statuses):
+        return "科技成长方向出现共振，明日关注成交额能否继续放大。"
+    if any(item.status == "分歧" for item in tracking):
+        return "科技方向内部出现分化，明日关注强势分支能否延续。"
+
+    index_changes = [item.change_pct for item in indexes if item.change_pct is not None]
+    index_positive = bool(index_changes) and sum(index_changes) / len(index_changes) > 0
+    tech_weak = all(status in {"偏弱", "分歧", "数据不足"} for status in core_statuses)
+    if index_positive and tech_weak:
+        return "指数表现强于科技主线，明日关注资金是否轮动回科技方向。"
+
+    return "重点方向表现仍需结合成交额和市场宽度观察，明日关注主线延续性。"
+
+
 def _build_summary(
     indexes: list[MarketItem],
     breadth: dict[str, int | float | str],
@@ -229,6 +322,10 @@ def _missing_indexes() -> list[MarketItem]:
 
 def _missing_focus_items() -> list[MarketItem]:
     return [MarketItem(name=name, symbol="-", extra="数据暂不可用") for name in FOCUS_KEYWORDS]
+
+
+def _missing_theme_tracking(themes: list[WatchTheme]) -> list[ThemeTracking]:
+    return [ThemeTracking(name=theme.name, status="数据不足") for theme in themes]
 
 
 def _to_float(value: object) -> float | None:

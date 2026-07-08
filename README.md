@@ -1,19 +1,27 @@
 # market-daily-wechat-report
 
-每天 A股和美股收盘后生成 Markdown 收盘报告，并通过微信推送。当前是第一阶段 MVP，支持 Server酱 Turbo 和 PushPlus。
+每天 A股和美股收盘后生成 Markdown 收盘报告，并通过微信推送。当前支持重点方向跟踪、科技龙头观察、降级报告和 dry-run 调试。
 
 ## 功能
 
-- A股：主要指数、涨跌幅、成交额、市场宽度、涨跌停数量、领涨/领跌板块、半导体/CPO/AI/机器人等重点方向、简短总结。
-- 美股：道琼斯、纳斯达克、标普500，NVDA/AAPL/MSFT/TSLA/META/GOOGL，VIX、美元指数、10年美债收益率，以及对次日 A股科技方向的观察提示。
+- A股：主要指数、涨跌幅、成交额、市场宽度、涨跌停数量、领涨/领跌板块、重点方向跟踪、明日观察、简短总结。
+- 美股：道琼斯、纳斯达克、标普500，科技龙头观察，以及对次日 A股科技方向的观察提示。
 - 推送：通过 `PUSH_CHANNEL` 在 `serverchan` 和 `pushplus` 之间切换，也可以设为 `none` 只生成报告。
 - 去重：以“市场 + 交易日”为键写入 `state/push_log.json`，避免同一市场同一交易日重复推送。
 - 异常提醒：数据获取或报告生成失败时，会尝试向微信发送失败提醒。
 - 报告归档：生成的 Markdown 会保存到 `reports/`。
 
+## Phase 2.1 能力
+
+- A股新增【重点方向跟踪】：按配置关键词匹配板块，输出相关板块、平均涨跌幅、最强/最弱板块和状态判断。
+- A股新增【明日观察】：基于重点方向状态生成规则化观察提示，不输出买卖建议。
+- 美股新增【科技龙头观察】：输出涨幅前三、跌幅前三、AI算力相关和大型科技股票表现。
+- 关注列表配置化：可通过 `config/watchlist.yml` 调整 A股方向关键词和美股 ticker。
+
 ## 目录结构
 
 ```text
+config/                  # watchlist.yml 关注列表
 market_daily_wechat_report/
   data/                  # AKShare/yfinance 数据适配器
   config.py              # 环境变量配置
@@ -27,6 +35,17 @@ state/                   # 去重状态
 tests/                   # pytest 测试
 .github/workflows/       # GitHub Actions 定时任务
 ```
+
+## 关注列表配置
+
+关注列表位于 `config/watchlist.yml`。
+
+可以调整：
+
+- A股重点方向名称和关键词
+- 美股关注 ticker
+
+如果 `watchlist.yml` 不存在或读取失败，程序会使用内置默认关注列表继续运行，不会导致报告失败。不要把任何 token 写入这个文件。
 
 ## 本地运行
 
@@ -92,6 +111,8 @@ python -m market_daily_wechat_report.main
 
 如果显式分别执行 A股和美股真实推送命令，会消耗两次微信推送额度。Server酱可能有每日发送次数限制，本地调试应优先使用 `--dry-run`。
 
+GitHub Actions 手动触发时，`push=false` 不推送微信；数据源失败时仍会生成降级报告。
+
 ## GitHub Secrets
 
 在 GitHub 仓库中进入 `Settings -> Secrets and variables -> Actions -> New repository secret`，添加：
@@ -127,3 +148,4 @@ pytest
 - AKShare 和 yfinance 都依赖外部数据源，字段或可用性可能变化；如果数据源临时失败，程序会生成包含“数据源状态”的降级或部分报告。
 - A股节假日优先使用 AKShare 交易日历判断；交易日历获取失败时，会退回到工作日判断。
 - 美股报告使用 yfinance 最近日线数据，并以返回的最新交易日作为去重日期。
+- 报告只做复盘和观察提示，不输出买入、卖出、加仓、减仓等交易指令。
