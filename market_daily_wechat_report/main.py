@@ -65,6 +65,13 @@ def _run_market(market: str, settings: Settings, dry_run: bool = False) -> RunRe
     report_path = None
     pushed = False
 
+    if _is_push_blocked_by_market_timing(snapshot):
+        final_snapshot = with_push_status(snapshot, "美股未收盘，已跳过微信推送")
+        report_path = save_report(final_snapshot, render_report(final_snapshot), settings.reports_dir)
+        print("美股未收盘，已跳过微信推送")
+        print(f"[report] saved: {report_path}")
+        return RunResult(snapshot.market, False, False, str(report_path), snapshot.data_sources, final_snapshot)
+
     if not dry_run and has_data and dedupe.has_sent(snapshot.market, snapshot.session_date):
         print(f"[dedupe] skipped {snapshot.market} {snapshot.session_date}: already sent")
         return RunResult(snapshot.market, True, False, None, snapshot.data_sources, snapshot)
@@ -138,6 +145,14 @@ def _run_auto_combined(markets: list[str], settings: Settings, dry_run: bool = F
         print(f"[report] saved: {path}")
         snapshots.append(final_snapshot)
         results.append(RunResult(snapshot.market, has_data, False, str(path), snapshot.data_sources, final_snapshot))
+
+    if any(_is_push_blocked_by_market_timing(snapshot) for snapshot in snapshots):
+        print("美股未收盘，综合报告已跳过微信推送")
+        path = settings.reports_dir / f"all_{date.today().isoformat()}_report.md"
+        settings.reports_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(_render_combined_report(snapshots, "美股未收盘，已跳过微信推送"), encoding="utf-8")
+        print(f"[report] saved: {path}")
+        return 0
 
     if dry_run:
         print("dry-run 模式：已跳过微信推送")
@@ -233,6 +248,13 @@ def _render_combined_report(snapshots: list[MarketSnapshot], push_status: str) -
 def _has_successful_market_data(snapshot: MarketSnapshot) -> bool:
     ignored = ("交易日", "收盘数据就绪判断", "解析")
     return any(status.success and not any(token in status.name for token in ignored) for status in snapshot.data_sources)
+
+
+def _is_push_blocked_by_market_timing(snapshot: MarketSnapshot) -> bool:
+    return snapshot.market == "us" and any(
+        status.name == "美股-收盘数据就绪判断" and not status.success
+        for status in snapshot.data_sources
+    )
 
 
 def _resolve_markets(market: str) -> list[str]:
