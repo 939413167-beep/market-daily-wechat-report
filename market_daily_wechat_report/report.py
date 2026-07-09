@@ -92,7 +92,7 @@ def with_push_status(snapshot: MarketSnapshot, push_status: str) -> MarketSnapsh
 
 def _render_items(title: str, items: list[MarketItem], include_amount: bool = False) -> str:
     rows = [title]
-    if not items:
+    if not items or _all_items_missing(items):
         rows.append("- 数据暂不可用")
         return "\n".join(rows)
 
@@ -117,12 +117,16 @@ def _render_data_sources(statuses: list[DataSourceStatus]) -> str:
         if status.success:
             rows.append(f"- {status.name}: 成功")
         else:
-            rows.append(f"- {status.name}: 失败，{status.error or '数据暂不可用'}")
+            rows.append(f"- {status.name}: 失败，{_friendly_error(status.error)}")
     return "\n".join(rows)
 
 
 def _render_theme_tracking(items: list[ThemeTracking]) -> str:
     rows = ["## 重点方向跟踪"]
+    if all(item.status == "数据不足" and not item.matched_boards for item in items):
+        names = "、".join(item.name for item in items)
+        rows.append(f"- 数据不足: {names}")
+        return "\n".join(rows)
     for item in items:
         rows.append(f"### {item.name}")
         matched = "、".join(board.name for board in item.matched_boards[:5]) or "数据不足"
@@ -153,6 +157,34 @@ def _theme_board_text(item: MarketItem | None) -> str:
     if item is None:
         return "数据不足"
     return f"{item.name} {fmt_pct(item.change_pct)}"
+
+
+def _all_items_missing(items: list[MarketItem]) -> bool:
+    return all(
+        item.price is None
+        and item.change_pct is None
+        and item.amount is None
+        and (not item.extra or "数据暂不可用" in item.extra or "yfinance 数据暂不可用" in item.extra)
+        for item in items
+    )
+
+
+def _friendly_error(error: str | None) -> str:
+    if not error:
+        return "数据暂不可用"
+    lower = error.lower()
+    hints = []
+    if "too many requests" in lower or "rate limit" in lower:
+        hints.append("数据源限流")
+    if "remotedisconnected" in lower or "remote end closed" in lower:
+        hints.append("连接被远端关闭")
+    if "max retries exceeded" in lower:
+        hints.append("多次重试后仍失败")
+    if "jsondecodeerror" in lower or "no value to decode" in lower:
+        hints.append("返回数据为空或格式异常")
+    if "timeout" in lower or "timed out" in lower:
+        hints.append("请求超时")
+    return "，".join(dict.fromkeys(hints)) or error[:80]
 
 
 def _market_status(statuses: list[DataSourceStatus], prefix: str) -> str:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
+import requests
 
 from ..models import DataSourceStatus, MarketItem, MarketSnapshot, ThemeTracking
 from ..watchlist import WatchTheme, load_watchlist
@@ -40,6 +41,10 @@ def fetch_a_share_snapshot(session_date: date | None = None) -> MarketSnapshot:
 
     index_df, status = fetch_with_retry("A股-主要指数-东方财富", ak.stock_zh_index_spot_em)
     statuses.append(status)
+    index_fallback_df = None
+    if index_df is None or not _has_all_indexes(index_df):
+        index_fallback_df, status = fetch_with_retry("A股-主要指数-Sina备用", _fetch_index_sina_direct)
+        statuses.append(status)
     stock_df, status = fetch_with_retry("A股-市场宽度-东方财富", ak.stock_zh_a_spot_em)
     statuses.append(status)
     board_df, status = fetch_with_retry("A股-行业板块-东方财富", ak.stock_board_industry_name_em)
@@ -48,7 +53,7 @@ def fetch_a_share_snapshot(session_date: date | None = None) -> MarketSnapshot:
     indexes = _safe_extract(
         "A股-主要指数解析",
         statuses,
-        lambda: _extract_indexes(index_df) if index_df is not None else _missing_indexes(),
+        lambda: _extract_indexes(index_df, index_fallback_df),
         _missing_indexes(),
     )
     breadth = _safe_extract(
@@ -129,11 +134,50 @@ def _safe_extract(name: str, statuses: list[DataSourceStatus], func, fallback):
         return fallback
 
 
-def _extract_indexes(df: pd.DataFrame) -> list[MarketItem]:
+def _fetch_index_sina_direct() -> pd.DataFrame:
+    symbols = {
+        "000001": "s_sh000001",
+        "399001": "s_sz399001",
+        "399006": "s_sz399006",
+        "000688": "s_sh000688",
+    }
+    url = "https://hq.sinajs.cn/list=" + ",".join(symbols.values())
+    response = requests.get(
+        url,
+        headers={"Referer": "https://finance.sina.com.cn/", "User-Agent": "Mozilla/5.0"},
+        timeout=10,
+    )
+    response.raise_for_status()
+
+    rows = []
+    for code, symbol in symbols.items():
+        marker = f'hq_str_{symbol}="'
+        line = next((item for item in response.text.splitlines() if marker in item), "")
+        payload = line.split(marker, 1)[-1].split('";', 1)[0] if line else ""
+        parts = payload.split(",")
+        if len(parts) < 6:
+            continue
+        rows.append(
+            {
+                "代码": code,
+                "名称": parts[0],
+                "最新价": _to_float(parts[1]),
+                "涨跌幅": _to_float(parts[3]),
+                "成交额": (_to_float(parts[5]) or 0) * 10_000,
+            }
+        )
+    if not rows:
+        raise ValueError("Sina 主要指数备用源无有效数据")
+    return pd.DataFrame(rows)
+
+
+def _extract_indexes(primary_df: pd.DataFrame | None, fallback_df: pd.DataFrame | None = None) -> list[MarketItem]:
     items: list[MarketItem] = []
     for name, code in INDEX_KEYWORDS.items():
         try:
-            row = _find_row(df, name=name, code=code)
+            row = _find_row(primary_df, name=name, code=code)
+            if row is None:
+                row = _find_row(fallback_df, name=name, code=code)
             if row is None:
                 items.append(MarketItem(name=name, symbol=code, extra="数据暂不可用"))
                 continue
@@ -149,6 +193,12 @@ def _extract_indexes(df: pd.DataFrame) -> list[MarketItem]:
         except Exception as exc:
             items.append(MarketItem(name=name, symbol=code, extra=f"数据暂不可用: {summarize_error(exc)}"))
     return items
+
+
+def _has_all_indexes(df: pd.DataFrame | None) -> bool:
+    if df is None:
+        return False
+    return all(_find_row(df, name=name, code=code) is not None for name, code in INDEX_KEYWORDS.items())
 
 
 def _build_breadth(df: pd.DataFrame) -> dict[str, int | float | str]:
@@ -279,18 +329,23 @@ def _build_summary(
     laggards: list[MarketItem],
     statuses: list[DataSourceStatus],
 ) -> str:
-    if not any(status.success for status in statuses if status.name.startswith("A股-") and "解析" not in status.name):
-        return "A股数据源暂不可用，已生成降级报告，建议稍后手动重试。"
+    has_index_data = any(item.change_pct is not None for item in indexes)
+    if not has_index_data:
+        return "A股实时行情数据暂不可用，已生成降级报告。建议稍后手动重试或查看交易所/行情软件确认收盘情况。"
     index_text = "，".join(f"{item.name}{_signed(item.change_pct)}" for item in indexes)
     up = int(breadth.get("上涨家数", 0) or 0)
     down = int(breadth.get("下跌家数", 0) or 0)
+    if not breadth:
+        return f"{index_text}。市场宽度、涨跌停和板块数据暂不可用，今日报告仅保留主要指数参考。"
     leader_text = "、".join(item.name for item in leaders[:3]) or "暂无"
     laggard_text = "、".join(item.name for item in laggards[:3]) or "暂无"
     tone = "偏强" if up > down else "偏弱" if up < down else "均衡"
     return f"{index_text}。市场宽度{tone}，上涨{up}家、下跌{down}家。领涨方向集中在{leader_text}，领跌方向主要为{laggard_text}。"
 
 
-def _find_row(df: pd.DataFrame, name: str, code: str) -> pd.Series | None:
+def _find_row(df: pd.DataFrame | None, name: str, code: str) -> pd.Series | None:
+    if df is None:
+        return None
     for col in ("名称", "name"):
         if col in df.columns:
             matched = df[df[col].astype(str).str.contains(name, na=False)]
@@ -298,7 +353,7 @@ def _find_row(df: pd.DataFrame, name: str, code: str) -> pd.Series | None:
                 return matched.iloc[0]
     for col in ("代码", "code"):
         if col in df.columns:
-            matched = df[df[col].astype(str) == code]
+            matched = df[df[col].astype(str).str.endswith(code)]
             if not matched.empty:
                 return matched.iloc[0]
     return None
