@@ -4,9 +4,8 @@ on:
   schedule:
     # A shares close report: 15:30 Beijing/Taipei time.
     - cron: "30 7 * * 1-5"
-    # US close report. Two UTC slots cover daylight saving time and standard time.
-    - cron: "30 21 * * 1-5"
-    - cron: "30 22 * * 1-5"
+    # US close report: 08:00 Beijing/Taipei time, Tuesday-Saturday.
+    - cron: "0 0 * * 2-6"
   workflow_dispatch:
     inputs:
       mode:
@@ -67,11 +66,13 @@ jobs:
             echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
           else
             echo "mode=report" >> "$GITHUB_OUTPUT"
-            hour="$(date -u +%H)"
-            if [ "$hour" = "07" ]; then
+            schedule="${{ github.event.schedule }}"
+            if [ "$schedule" = "30 7 * * 1-5" ]; then
               echo "market=a" >> "$GITHUB_OUTPUT"
-            else
+            elif [ "$schedule" = "0 0 * * 2-6" ]; then
               echo "market=us" >> "$GITHUB_OUTPUT"
+            else
+              echo "market=auto" >> "$GITHUB_OUTPUT"
             fi
             echo "push=true" >> "$GITHUB_OUTPUT"
           fi
