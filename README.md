@@ -130,10 +130,10 @@ PUSHPLUS_TOKEN=你的_PushPlus_Token
 工作流文件位于 `.github/workflows/daily-report.yml`。
 
 - A股：`30 7 * * 1-5`，对应北京时间/台北时间周一至周五 15:30。
-- 美股：`0 0 * * 2-6`，对应北京时间/台北时间周二至周六 08:00，覆盖美股周一至周五收盘后的报告。
+- 美股：`5 0 * * 2-6`，对应北京时间/台北时间周二至周六 08:05，覆盖美股周一至周五收盘后的报告，并避开 GitHub Actions UTC 整点排队高峰。
 - 手动触发：支持 `workflow_dispatch`，可选择 `auto`、`a`、`us`，也可选择是否真的推送。
 
-GitHub Actions 的 cron 使用 UTC 时间。定时任务会按 cron 字符串固定映射到 A股或美股，避免因 GitHub Actions 延迟启动导致市场误判。
+GitHub Actions 的 cron 使用 UTC 时间。定时任务会按 cron 字符串固定映射到 A股或美股，避免因 GitHub Actions 延迟启动导致市场误判。A股定时任务如果被 GitHub 延迟到北京时间 15:30-18:00 之外，会自动跳过推送，避免半夜补发 A股日报。
 
 ## 测试
 

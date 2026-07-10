@@ -4,8 +4,9 @@ on:
   schedule:
     # A shares close report: 15:30 Beijing/Taipei time.
     - cron: "30 7 * * 1-5"
-    # US close report: 08:00 Beijing/Taipei time, Tuesday-Saturday.
-    - cron: "0 0 * * 2-6"
+    # US close report: 08:05 Beijing/Taipei time, Tuesday-Saturday.
+    # Avoid the UTC top-of-hour schedule queue.
+    - cron: "5 0 * * 2-6"
   workflow_dispatch:
     inputs:
       mode:
@@ -64,12 +65,24 @@ jobs:
             echo "mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
             echo "market=${{ inputs.market }}" >> "$GITHUB_OUTPUT"
             echo "push=${{ inputs.push }}" >> "$GITHUB_OUTPUT"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=" >> "$GITHUB_OUTPUT"
           else
             echo "mode=report" >> "$GITHUB_OUTPUT"
             schedule="${{ github.event.schedule }}"
+            bj_time="$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S %Z')"
+            bj_hm="$(TZ=Asia/Shanghai date '+%H%M')"
+            bj_hm_num=$((10#$bj_hm))
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=" >> "$GITHUB_OUTPUT"
+            echo "Schedule: $schedule; Beijing time: $bj_time"
             if [ "$schedule" = "30 7 * * 1-5" ]; then
               echo "market=a" >> "$GITHUB_OUTPUT"
-            elif [ "$schedule" = "0 0 * * 2-6" ]; then
+              if [ "$bj_hm_num" -lt 1530 ] || [ "$bj_hm_num" -gt 1800 ]; then
+                echo "should_run=false" >> "$GITHUB_OUTPUT"
+                echo "skip_reason=A股定时任务延迟到北京时间 $bj_time，已跳过推送，避免半夜补发 A股日报。" >> "$GITHUB_OUTPUT"
+              fi
+            elif [ "$schedule" = "5 0 * * 2-6" ]; then
               echo "market=us" >> "$GITHUB_OUTPUT"
             else
               echo "market=auto" >> "$GITHUB_OUTPUT"
@@ -86,6 +99,7 @@ jobs:
             market-daily-state-${{ runner.os }}-${{ steps.runtime.outputs.cache_date }}-
 
       - name: Run report
+        if: steps.runtime.outputs.should_run == 'true'
         shell: bash
         run: |
           mkdir -p reports state
@@ -96,6 +110,11 @@ jobs:
           else
             python -m market_daily_wechat_report.main --market "${{ steps.runtime.outputs.market }}" --dry-run
           fi
+
+      - name: Skip delayed scheduled report
+        if: steps.runtime.outputs.should_run != 'true'
+        run: |
+          echo "${{ steps.runtime.outputs.skip_reason }}"
 
       - name: Upload generated reports
         if: always()
